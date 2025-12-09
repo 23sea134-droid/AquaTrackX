@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "AquaTrackX",
+    "slug": "AquaTrackX",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/AquaTrackX_Logo.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "splash": {
+      "image": "./assets/AquaTrackX_Logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/AquaTrackX_Logo.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/AquaTrackX_Logo.png"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-web-browser",
+      "expo-router"
+    ]
+  }
+}
