@@ -9,7 +9,7 @@
 
 // ==================== CONFIG ====================
 #define DEVICE_ID "WM001"  // Change this for each device
-#define FIREBASE_HOST "https://aquatrackx-default-rtdb.asia-southeast1.firebasedatabase.app/"  // CHANGE THIS
+#define FIREBASE_HOST "aquatrackx-default-rtdb.asia-southeast1.firebasedatabase.app"
 #define FIREBASE_AUTH ""  // Leave blank if using public rules, or add your secret
 #define FLOW_PIN 27
 #define RELAY_PIN 19
@@ -72,6 +72,79 @@ void measureFlow() {
     lastTime = millis();
     attachInterrupt(FLOW_PIN, pulseCounter, FALLING);
   }
+}
+
+// ==================== FIXED BATTERY READING WITH SMART CALIBRATION ====================
+int readBatteryPercentage() {
+  // Average 10 readings to reduce noise
+  long adcSum = 0;
+  for (int i = 0; i < 10; i++) {
+    adcSum += analogRead(BATTERY_PIN);
+    delay(1);
+  }
+  int adc = adcSum / 10;
+  
+  // Calculate voltage at GPIO35 (0-3.3V range)
+  float gpioVoltage = (adc / 4095.0) * 3.3;
+  
+  // Calculate 5V rail voltage using voltage divider formula
+  // Your circuit: 5V → 100kΩ → GPIO35 → 47kΩ → GND
+  // Voltage divider ratio: (100k + 47k) / 47k = 3.1277
+  float rail5V = gpioVoltage * 3.1277;
+  
+  // ===== SMART BATTERY CALCULATION =====
+  // Based on typical 5V regulator behavior with 12V input:
+  // - USB power or full battery: 5.0V ± 0.05V
+  // - Battery dropping: 4.8V - 5.0V
+  // - Low battery: 4.2V - 4.8V
+  // - Critical: < 4.2V (regulator brownout)
+  
+  int batteryPercent;
+  
+  if (rail5V >= 4.95) {
+    // Excellent - USB or fully charged battery
+    batteryPercent = 100;
+  } else if (rail5V >= 4.80) {
+    // Good - 80-99%
+    batteryPercent = map((int)(rail5V * 100), 480, 495, 80, 99);
+  } else if (rail5V >= 4.50) {
+    // Fair - 30-79%
+    batteryPercent = map((int)(rail5V * 100), 450, 480, 30, 79);
+  } else if (rail5V >= 4.20) {
+    // Low - 10-29%
+    batteryPercent = map((int)(rail5V * 100), 420, 450, 10, 29);
+  } else {
+    // Critical - 0-9%
+    batteryPercent = map((int)(rail5V * 100), 380, 420, 0, 9);
+  }
+  
+  batteryPercent = constrain(batteryPercent, 0, 100);
+  
+  // Debug output every 10 seconds
+  static unsigned long lastDebug = 0;
+  if (millis() - lastDebug > 10000) {
+    Serial.println("\n========== BATTERY STATUS ==========");
+    Serial.printf("ADC: %d\n", adc);
+    Serial.printf("GPIO35: %.3fV\n", gpioVoltage);
+    Serial.printf("5V Rail: %.3fV\n", rail5V);
+    Serial.printf("Battery: %d%%\n", batteryPercent);
+    
+    if (rail5V >= 4.95) {
+      Serial.println("Status: EXCELLENT (USB/Full)");
+    } else if (rail5V >= 4.80) {
+      Serial.println("Status: GOOD");
+    } else if (rail5V >= 4.50) {
+      Serial.println("Status: FAIR");
+    } else if (rail5V >= 4.20) {
+      Serial.println("Status: LOW - Charge Soon");
+    } else {
+      Serial.println("Status: CRITICAL - Charge Now!");
+    }
+    Serial.println("====================================\n");
+    lastDebug = millis();
+  }
+  
+  return batteryPercent;
 }
 
 // ==================== FIREBASE HTTP ====================
@@ -168,7 +241,7 @@ void registerDevice() {
   doc["addedAt"] = millis() / 1000;
   doc["lastSeen"] = millis() / 1000;
   doc["version"] = "1.0.0";
-  doc["firmwareDate"] = _DATE_;
+  doc["firmwareDate"] = '_DATE_';
   
   String json;
   serializeJson(doc, json);
@@ -440,12 +513,9 @@ void loop() {
     buttonPressStart = 0;
   }
   
-  // Update battery level every 10 seconds
+  // Update battery level every 10 seconds using the corrected smart formula
   if (millis() - lastBattery > 10000) {
-    int adc = analogRead(BATTERY_PIN);
-    float voltage = (adc / 4095.0) * 3.3 * 2.0; // Voltage divider factor
-    float batteryPercent = ((voltage - 3.0) / (4.2 - 3.0)) * 100; // LiPo: 3.0V-4.2V
-    battery = constrain(batteryPercent, 0, 100);
+    battery = readBatteryPercentage();  // Now uses the corrected smart function
     lastBattery = millis();
   }
   
@@ -483,6 +553,6 @@ void loop() {
     updateDisplay();
     lastDisplay = millis();
   }
-  
-  delay(10);
+  
+  delay(10);
 }
