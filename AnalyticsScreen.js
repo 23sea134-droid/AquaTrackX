@@ -379,8 +379,8 @@ const AnalyticsScreen = ({ navigation, route }) => {
       peakFlow: Math.max(0, peakFlow),
       duration,
       comparison,
-      chartData,
-      realtime: realtimeData
+      chartData
+      // ✅ REMOVED: realtime: realtimeData
     };
   };
 
@@ -429,8 +429,8 @@ const AnalyticsScreen = ({ navigation, route }) => {
       peakFlow: 0,
       duration: 0,
       comparison: { value: 0, trend: 'up' },
-      chartData,
-      realtime: realtimeData
+      chartData
+      // ✅ REMOVED: realtime: realtimeData
     };
   };
 
