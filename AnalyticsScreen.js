@@ -269,22 +269,31 @@ const AnalyticsScreen = ({ navigation, route }) => {
           label: hour === 0 ? '12 AM' : hour === 6 ? '6 AM' : hour === 12 ? '12 PM' : hour === 18 ? '6 PM' : '',
           hour,
           usage: 0,
-          count: 0
+          startTotal: null,
+          endTotal: null
         }));
 
         historyData.forEach(entry => {
           const date = new Date(entry.timestamp);
           const hour = date.getHours();
-          chartData[hour].usage += entry.flowRate;
-          chartData[hour].count += 1;
+          
+          // Track first and last totalLitres reading for each hour
+          if (chartData[hour].startTotal === null) {
+            chartData[hour].startTotal = entry.totalLitres;
+          }
+          chartData[hour].endTotal = entry.totalLitres;
+          
+          // Still collect flow rates for stats
           flowRates.push(entry.flowRate);
           if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
         });
 
-        // Average flow rates per hour
+        // Calculate actual usage per hour
         chartData = chartData.map(item => ({
           ...item,
-          usage: item.count > 0 ? item.usage / item.count : 0
+          usage: item.startTotal !== null && item.endTotal !== null 
+            ? Math.max(0, item.endTotal - item.startTotal)
+            : 0
         }));
         break;
 
@@ -293,22 +302,28 @@ const AnalyticsScreen = ({ navigation, route }) => {
         chartData = daysOfWeek.map((day, index) => ({
           label: day,
           usage: 0,
-          count: 0
+          startTotal: null,
+          endTotal: null
         }));
 
-        // Group by day of week
         historyData.forEach(entry => {
           const date = new Date(entry.timestamp);
           const dayIndex = date.getDay();
-          chartData[dayIndex].usage += entry.flowRate;
-          chartData[dayIndex].count += 1;
+          
+          if (chartData[dayIndex].startTotal === null) {
+            chartData[dayIndex].startTotal = entry.totalLitres;
+          }
+          chartData[dayIndex].endTotal = entry.totalLitres;
+          
           flowRates.push(entry.flowRate);
           if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
         });
 
         chartData = chartData.map(item => ({
           ...item,
-          usage: item.count > 0 ? item.usage / item.count : 0
+          usage: item.startTotal !== null && item.endTotal !== null 
+            ? Math.max(0, item.endTotal - item.startTotal)
+            : 0
         }));
         break;
 
@@ -318,15 +333,19 @@ const AnalyticsScreen = ({ navigation, route }) => {
           label: (day + 1).toString(),
           day: day + 1,
           usage: 0,
-          count: 0
+          startTotal: null,
+          endTotal: null
         }));
 
         historyData.forEach(entry => {
           const date = new Date(entry.timestamp);
           const day = date.getDate() - 1;
           if (day >= 0 && day < daysInMonth) {
-            chartData[day].usage += entry.flowRate;
-            chartData[day].count += 1;
+            if (chartData[day].startTotal === null) {
+              chartData[day].startTotal = entry.totalLitres;
+            }
+            chartData[day].endTotal = entry.totalLitres;
+            
             flowRates.push(entry.flowRate);
             if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
           }
@@ -334,7 +353,9 @@ const AnalyticsScreen = ({ navigation, route }) => {
 
         chartData = chartData.map(item => ({
           ...item,
-          usage: item.count > 0 ? item.usage / item.count : 0
+          usage: item.startTotal !== null && item.endTotal !== null 
+            ? Math.max(0, item.endTotal - item.startTotal)
+            : 0
         }));
         break;
 
@@ -343,21 +364,28 @@ const AnalyticsScreen = ({ navigation, route }) => {
         chartData = months.map((month, index) => ({
           label: month,
           usage: 0,
-          count: 0
+          startTotal: null,
+          endTotal: null
         }));
 
         historyData.forEach(entry => {
           const date = new Date(entry.timestamp);
           const monthIndex = date.getMonth();
-          chartData[monthIndex].usage += entry.flowRate;
-          chartData[monthIndex].count += 1;
+          
+          if (chartData[monthIndex].startTotal === null) {
+            chartData[monthIndex].startTotal = entry.totalLitres;
+          }
+          chartData[monthIndex].endTotal = entry.totalLitres;
+          
           flowRates.push(entry.flowRate);
           if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
         });
 
         chartData = chartData.map(item => ({
           ...item,
-          usage: item.count > 0 ? item.usage / item.count : 0
+          usage: item.startTotal !== null && item.endTotal !== null 
+            ? Math.max(0, item.endTotal - item.startTotal)
+            : 0
         }));
         break;
     }
@@ -380,7 +408,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
       duration,
       comparison,
       chartData
-      // ✅ REMOVED: realtime: realtimeData
     };
   };
 
@@ -430,7 +457,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
       duration: 0,
       comparison: { value: 0, trend: 'up' },
       chartData
-      // ✅ REMOVED: realtime: realtimeData
     };
   };
 
