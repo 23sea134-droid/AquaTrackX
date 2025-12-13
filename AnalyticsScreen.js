@@ -38,7 +38,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [showDeviceModal, setShowDeviceModal] = useState(false);
   const [error, setError] = useState(null);
-  const [realtimeData, setRealtimeData] = useState(null);
 
   const auth = getAuth();
   
@@ -105,38 +104,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
 
     fetchDevices();
   }, []);
-
-  // Setup realtime data listener for selected device
-  useEffect(() => {
-    if (!selectedDevice?.deviceId) return;
-
-    console.log('📡 Setting up realtime listener for device:', selectedDevice.deviceId);
-
-    // CRITICAL FIX: Use deviceId (the actual device ID) not id (Firebase key)
-    const deviceRef = ref(database, `devices/${selectedDevice.deviceId}/data`);
-    
-    const unsubscribe = onValue(deviceRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        console.log('✅ Realtime data received:', data);
-        setRealtimeData(data);
-      }
-    }, (error) => {
-      console.error('❌ Realtime data error:', error);
-      // If permission denied, try to claim ownership
-      if (error.message?.includes('permission_denied')) {
-        console.log('🔒 Permission denied - attempting to claim ownership');
-        deviceService.claimDeviceOwnership(auth.currentUser?.uid, selectedDevice.deviceId)
-          .then(result => {
-            if (result.success) {
-              console.log('✅ Ownership claimed, listener should work now');
-            }
-          });
-      }
-    });
-
-    return () => unsubscribe();
-  }, [selectedDevice?.deviceId, database]);
 
   // Fetch historical data when device or tab changes
   useEffect(() => {
@@ -904,57 +871,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
     );
   };
 
-  const RealtimeStats = () => {
-    if (!realtimeData) return null;
-
-    return (
-      <View style={styles.realtimeContainer}>
-        <Text style={styles.sectionTitle}>Current Status</Text>
-        <View style={styles.realtimeGrid}>
-          <View style={styles.realtimeCard}>
-            <View style={styles.realtimeHeader}>
-              <Ionicons name="speedometer" size={20} color="#06b6d4" />
-              <Text style={styles.realtimeTitle}>Flow Rate</Text>
-            </View>
-            <Text style={styles.realtimeValue}>{realtimeData.flowRate?.toFixed(1) || '0.0'}</Text>
-            <Text style={styles.realtimeUnit}>L/min</Text>
-          </View>
-          
-          <View style={styles.realtimeCard}>
-            <View style={styles.realtimeHeader}>
-              <Ionicons name="water" size={20} color="#10B981" />
-              <Text style={styles.realtimeTitle}>Total Usage</Text>
-            </View>
-            <Text style={styles.realtimeValue}>{realtimeData.totalLitres?.toFixed(0) || '0'}</Text>
-            <Text style={styles.realtimeUnit}>Liters</Text>
-          </View>
-          
-          <View style={styles.realtimeCard}>
-            <View style={styles.realtimeHeader}>
-              <Ionicons name="battery-charging" size={20} color="#F59E0B" />
-              <Text style={styles.realtimeTitle}>Battery</Text>
-            </View>
-            <Text style={styles.realtimeValue}>{realtimeData.batteryPercentage || '0'}</Text>
-            <Text style={styles.realtimeUnit}>%</Text>
-          </View>
-          
-          <View style={styles.realtimeCard}>
-            <View style={styles.realtimeHeader}>
-              <Ionicons name={realtimeData.valveState === 'OPEN' ? 'water' : 'water-outline'} size={20} color={realtimeData.valveState === 'OPEN' ? '#10B981' : '#EF4444'} />
-              <Text style={styles.realtimeTitle}>Valve</Text>
-            </View>
-            <Text style={[styles.realtimeValue, { 
-              color: realtimeData.valveState === 'OPEN' ? '#10B981' : '#EF4444' 
-            }]}>
-              {realtimeData.valveState === 'OPEN' ? 'Open' : 'Closed'}
-            </Text>
-            <Text style={styles.realtimeUnit}></Text>
-          </View>
-        </View>
-      </View>
-    );
-  };
-
   if (loading && devices.length > 0) {
     return (
       <View style={styles.container}>
@@ -1097,9 +1013,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
               </View>
             )}
           </View>
-
-          {/* Realtime Stats */}
-          <RealtimeStats />
 
           {/* Time Period Tabs */}
           <View style={styles.section}>
@@ -1378,44 +1291,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 4,
     elevation: 4,
-  },
-  
-  // Realtime Stats
-  realtimeContainer: {
-    marginBottom: 30,
-  },
-  realtimeGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  realtimeCard: {
-    width: (width - 52) / 2,
-    backgroundColor: '#1f293780',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#37415140',
-  },
-  realtimeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  realtimeTitle: {
-    fontSize: 12,
-    color: '#9ca3af',
-    marginLeft: 8,
-  },
-  realtimeValue: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  realtimeUnit: {
-    fontSize: 14,
-    color: '#9ca3af',
   },
   
   // Tabs
