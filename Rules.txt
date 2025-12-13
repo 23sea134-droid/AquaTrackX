@@ -21,49 +21,37 @@
           ".read": true,
           ".write": "auth != null && auth.uid === $userId",
           "name": {
-            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.isString() && newData.val().length <= 100"
           },
           "email": {
-            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.isString()"
           },
           "phoneNumber": {
-            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.isString() || !newData.exists()"
           },
           "photoURL": {
-            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.isString() || !newData.exists()"
           },
           "createdAt": {
-            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.isNumber()"
           },
           "lastLoginAt": {
-            ".write": "auth != null && auth.uid === $userId",
             ".validate": "newData.isNumber()"
           },
           "alertPreferences": {
-            ".write": "auth != null && auth.uid === $userId",
             "email": {
-              ".write": "auth != null && auth.uid === $userId",
               ".validate": "newData.isBoolean()"
             },
             "sms": {
-              ".write": "auth != null && auth.uid === $userId",
               ".validate": "newData.isBoolean()"
             },
             "push": {
-              ".write": "auth != null && auth.uid === $userId",
               ".validate": "newData.isBoolean()"
             },
             "leakThreshold": {
-              ".write": "auth != null && auth.uid === $userId",
               ".validate": "newData.isNumber() && newData.val() > 0"
             },
             "batteryThreshold": {
-              ".write": "auth != null && auth.uid === $userId",
               ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
             },
             "$other": {
@@ -106,6 +94,9 @@
             "todayUsage": {
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
+            "claimedAt": {
+              ".validate": "newData.isNumber()"
+            },
             "lastAlert": {
               "type": {
                 ".validate": "newData.isString()"
@@ -140,7 +131,9 @@
        ================================ */
     "deviceOwners": {
       "$deviceId": {
+        // Any authenticated user can read to check ownership
         ".read": "auth != null",
+        // Only allow claiming if device is unclaimed OR you already own it
         ".write": "auth != null && (!data.exists() || data.val() === auth.uid)",
         ".validate": "newData.isString() && newData.val().length >= 20"
       }
@@ -148,16 +141,21 @@
 
     /* ================================
        3. Device Data & Info
-       All device real-time data and status
+       CRITICAL FIX: Allow devices to write without auth
+                     Allow authenticated users to read their devices
        ================================ */
     "devices": {
       "$deviceId": {
+        // Users can read if they own the device OR if device is unclaimed (for discovery)
         ".read": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !root.child('deviceOwners').child($deviceId).exists())",
+        
+        // Allow ANYONE to write (devices write without authentication)
         ".write": true,
 
         "info": {
-          ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+          // Devices can write their info without authentication
           ".write": true,
+          
           "deviceId": {
             ".validate": "newData.isString() && newData.val() === $deviceId"
           },
@@ -234,8 +232,9 @@
         },
 
         "data": {
-          ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+          // Devices can write data without authentication
           ".write": true,
+          
           "deviceId": {
             ".validate": "newData.isString()"
           },
@@ -269,8 +268,11 @@
         },
 
         "commands": {
-          ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+          // Device can read commands (no auth required)
+          ".read": true,
+          // Only device owner can write commands
           ".write": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+          
           "valveControl": {
             ".validate": "newData.isBoolean()"
           },
@@ -298,12 +300,14 @@
     },
 
     /* ================================
-       4. History Data
+       4. History Data - CRITICAL FIX
        ================================ */
     "history": {
       "$deviceId": {
+        // Only device owner can read history
         ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
-        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !newData.exists())",
+        // Device can write history without authentication - CRITICAL FIX
+        ".write": true,
         ".indexOn": ["timestamp"],
 
         "$recordId": {
