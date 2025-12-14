@@ -116,8 +116,25 @@ const AnalyticsScreen = ({ navigation, route }) => {
       setError(null);
       
       try {
-        // CRITICAL FIX: Use deviceId not id
-        const fetchedData = await fetchDataFromFirebase(activeTab, selectedDevice.deviceId);
+        // ✅ FIX 1: Support both deviceId and id properties
+        const deviceIdToUse = selectedDevice.deviceId || selectedDevice.id;
+        
+        if (!deviceIdToUse) {
+          throw new Error('Invalid device ID');
+        }
+        
+        console.log('📊 Loading analytics for device:', deviceIdToUse);
+        
+        const fetchedData = await fetchDataFromFirebase(activeTab, deviceIdToUse);
+        
+        console.log('📊 === DATA LOADED ===');
+        console.log('📊 Total Usage:', fetchedData.totalUsage);
+        console.log('📊 Average Flow:', fetchedData.averageFlow);
+        console.log('📊 Peak Flow:', fetchedData.peakFlow);
+        console.log('📊 Chart Data Points:', fetchedData.chartData.length);
+        console.log('📊 Non-zero chart points:', fetchedData.chartData.filter(d => d.usage > 0).length);
+        console.log('📊 Sample chart data:', fetchedData.chartData.slice(0, 3));
+        
         setData(fetchedData);
       } catch (error) {
         console.error('❌ Error loading data:', error);
@@ -134,7 +151,7 @@ const AnalyticsScreen = ({ navigation, route }) => {
     loadData();
   }, [activeTab, selectedDevice, database]);
 
-  // Fetch data directly from Firebase history
+  // ✅ FIX 2: Improved Firebase data fetching with better error handling
   const fetchDataFromFirebase = async (period, deviceId) => {
     const now = new Date();
     let timeRange, dateLabel, startTime, endTime;
@@ -177,33 +194,81 @@ const AnalyticsScreen = ({ navigation, route }) => {
       
       const historyRef = ref(database, `history/${deviceId}`);
       
-      // ✅ USE TIME-BASED QUERY (more efficient)
-      const historyQuery = query(
-        historyRef,
-        orderByChild('timestamp'),
-        startAt(startTime),
-        endAt(endTime)
-      );
-
-      const snapshot = await get(historyQuery);
+      // ✅ FIX 3: Try to get all data first, then filter
+      // This works better with ESP32 timestamp format
+      const snapshot = await get(historyRef);
       
       if (!snapshot.exists()) {
-        console.log('ℹ️ No history data found for time range');
+        console.log('ℹ️ No history data found for device');
+        
+        // ✅ FIX 4: Try to get current data from devices/{deviceId}/data
+        const currentDataRef = ref(database, `devices/${deviceId}/data`);
+        const currentSnapshot = await get(currentDataRef);
+        
+        if (currentSnapshot.exists()) {
+          const currentData = currentSnapshot.val();
+          console.log('✅ Using current device data:', currentData);
+          
+          // Create a single history entry from current data
+          const historyData = [{
+            timestamp: Date.now(),
+            flowRate: currentData.flowRate || 0,
+            totalLitres: currentData.totalLitres || 0,
+            valveState: currentData.valveState || 'UNKNOWN',
+            batteryPercentage: currentData.batteryPercentage || 0
+          }];
+          
+          return processHistoryData(historyData, period, dateLabel, startTime, endTime);
+        }
+        
         return createEmptyData(period, dateLabel);
       }
 
       const historyData = [];
+      const now = Date.now();
+      
       snapshot.forEach((childSnapshot) => {
         const record = childSnapshot.val();
-        // Double-check timestamp is in range (Firebase sometimes includes boundary records)
-        if (record.timestamp >= startTime && record.timestamp <= endTime) {
-          historyData.push(record);
+        
+        // ✅ FIX 5: Handle both Unix timestamp and ESP32 millis() format
+        let recordTimestamp = record.timestamp;
+        
+        // If timestamp is too small (ESP32 millis since boot), use current time
+        if (recordTimestamp < 1000000000000) {
+          // This is millis() format, convert using recordedAt or current time
+          recordTimestamp = record.recordedAt || now;
+        }
+        
+        // Filter by time range
+        if (recordTimestamp >= startTime && recordTimestamp <= endTime) {
+          historyData.push({
+            ...record,
+            timestamp: recordTimestamp
+          });
         }
       });
 
       if (historyData.length === 0) {
         console.log('ℹ️ No history data in time range after filtering');
-        return createEmptyData(period, dateLabel);
+        
+        // Try current data as fallback
+        const currentDataRef = ref(database, `devices/${deviceId}/data`);
+        const currentSnapshot = await get(currentDataRef);
+        
+        if (currentSnapshot.exists()) {
+          const currentData = currentSnapshot.val();
+          console.log('✅ Using current device data as fallback');
+          
+          historyData.push({
+            timestamp: Date.now(),
+            flowRate: currentData.flowRate || 0,
+            totalLitres: currentData.totalLitres || 0,
+            valveState: currentData.valveState || 'UNKNOWN',
+            batteryPercentage: currentData.batteryPercentage || 0
+          });
+        } else {
+          return createEmptyData(period, dateLabel);
+        }
       }
 
       console.log('✅ Retrieved', historyData.length, 'history records');
@@ -214,11 +279,17 @@ const AnalyticsScreen = ({ navigation, route }) => {
       return processHistoryData(historyData, period, dateLabel, startTime, endTime);
     } catch (error) {
       console.error('❌ Firebase fetch error:', error);
+      console.error('Error details:', error.message);
       throw error;
     }
   };
 
   const processHistoryData = (historyData, period, dateLabel, startTime, endTime) => {
+    console.log('📊 processHistoryData called');
+    console.log('📊 Period:', period);
+    console.log('📊 History records:', historyData.length);
+    console.log('📊 Sample record:', historyData[0]);
+    
     let chartData = [];
     let totalUsage = 0;
     let flowRates = [];
@@ -227,8 +298,17 @@ const AnalyticsScreen = ({ navigation, route }) => {
 
     // Calculate total usage from first and last records
     if (historyData.length > 1) {
-      totalUsage = historyData[historyData.length - 1].totalLitres - historyData[0].totalLitres;
+      totalUsage = Math.max(0, historyData[historyData.length - 1].totalLitres - historyData[0].totalLitres);
+      console.log('📊 Total usage (first to last):', totalUsage);
+    } else if (historyData.length === 1) {
+      // Use the single record's total litres
+      totalUsage = historyData[0].totalLitres || 0;
+      console.log('📊 Total usage (single record):', totalUsage);
     }
+    
+    // 🔥 CRITICAL: If we have only 1 record with totalLitres but no historical breakdown,
+    // we need to show the current total in the current time period
+    const isSingleCurrentRecord = historyData.length === 1 && totalUsage > 0;
 
     switch(period) {
       case 'D': // Hourly breakdown
@@ -246,13 +326,15 @@ const AnalyticsScreen = ({ navigation, route }) => {
           
           // Track first and last totalLitres reading for each hour
           if (chartData[hour].startTotal === null) {
-            chartData[hour].startTotal = entry.totalLitres;
+            chartData[hour].startTotal = entry.totalLitres || 0;
           }
-          chartData[hour].endTotal = entry.totalLitres;
+          chartData[hour].endTotal = entry.totalLitres || 0;
           
           // Still collect flow rates for stats
-          flowRates.push(entry.flowRate);
-          if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+          if (entry.flowRate) {
+            flowRates.push(entry.flowRate);
+            if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+          }
         });
 
         // Calculate actual usage per hour
@@ -262,6 +344,13 @@ const AnalyticsScreen = ({ navigation, route }) => {
             ? Math.max(0, item.endTotal - item.startTotal)
             : 0
         }));
+        
+        // 🔥 FIX: If we have a single current record, show total usage in current hour
+        if (isSingleCurrentRecord) {
+          const currentHour = new Date().getHours();
+          console.log('📊 Single record detected, showing', totalUsage, 'L in current hour:', currentHour);
+          chartData[currentHour].usage = totalUsage;
+        }
         break;
 
       case 'W': // Daily breakdown
@@ -278,12 +367,14 @@ const AnalyticsScreen = ({ navigation, route }) => {
           const dayIndex = date.getDay();
           
           if (chartData[dayIndex].startTotal === null) {
-            chartData[dayIndex].startTotal = entry.totalLitres;
+            chartData[dayIndex].startTotal = entry.totalLitres || 0;
           }
-          chartData[dayIndex].endTotal = entry.totalLitres;
+          chartData[dayIndex].endTotal = entry.totalLitres || 0;
           
-          flowRates.push(entry.flowRate);
-          if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+          if (entry.flowRate) {
+            flowRates.push(entry.flowRate);
+            if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+          }
         });
 
         chartData = chartData.map(item => ({
@@ -292,10 +383,24 @@ const AnalyticsScreen = ({ navigation, route }) => {
             ? Math.max(0, item.endTotal - item.startTotal)
             : 0
         }));
+        
+        // 🔥 FIX: If we have a single current record, show total usage in current day
+        if (isSingleCurrentRecord) {
+          const currentDayIndex = new Date().getDay();
+          console.log('📊 Single record detected, showing', totalUsage, 'L in current day:', daysOfWeek[currentDayIndex]);
+          chartData[currentDayIndex].usage = totalUsage;
+        }
         break;
 
       case 'M': // Daily breakdown for month
-        const daysInMonth = new Date().getDate();
+        // ✅ FIX: Get actual number of days in the current month
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        const daysInMonth = new Date(year, month + 1, 0).getDate(); // This gets actual days in month
+        
+        console.log('📊 Month View - Days in month:', daysInMonth);
+        
         chartData = Array.from({ length: daysInMonth }, (_, day) => ({
           label: (day + 1).toString(),
           day: day + 1,
@@ -309,12 +414,14 @@ const AnalyticsScreen = ({ navigation, route }) => {
           const day = date.getDate() - 1;
           if (day >= 0 && day < daysInMonth) {
             if (chartData[day].startTotal === null) {
-              chartData[day].startTotal = entry.totalLitres;
+              chartData[day].startTotal = entry.totalLitres || 0;
             }
-            chartData[day].endTotal = entry.totalLitres;
+            chartData[day].endTotal = entry.totalLitres || 0;
             
-            flowRates.push(entry.flowRate);
-            if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+            if (entry.flowRate) {
+              flowRates.push(entry.flowRate);
+              if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+            }
           }
         });
 
@@ -324,6 +431,15 @@ const AnalyticsScreen = ({ navigation, route }) => {
             ? Math.max(0, item.endTotal - item.startTotal)
             : 0
         }));
+        
+        // 🔥 FIX: If we have a single current record, show total usage in current day
+        if (isSingleCurrentRecord) {
+          const currentDay = new Date().getDate() - 1; // 0-indexed
+          console.log('📊 Single record detected, showing', totalUsage, 'L in current day:', currentDay + 1);
+          if (currentDay >= 0 && currentDay < daysInMonth) {
+            chartData[currentDay].usage = totalUsage;
+          }
+        }
         break;
 
       case 'Y': // Monthly breakdown
@@ -340,12 +456,14 @@ const AnalyticsScreen = ({ navigation, route }) => {
           const monthIndex = date.getMonth();
           
           if (chartData[monthIndex].startTotal === null) {
-            chartData[monthIndex].startTotal = entry.totalLitres;
+            chartData[monthIndex].startTotal = entry.totalLitres || 0;
           }
-          chartData[monthIndex].endTotal = entry.totalLitres;
+          chartData[monthIndex].endTotal = entry.totalLitres || 0;
           
-          flowRates.push(entry.flowRate);
-          if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+          if (entry.flowRate) {
+            flowRates.push(entry.flowRate);
+            if (entry.flowRate > peakFlow) peakFlow = entry.flowRate;
+          }
         });
 
         chartData = chartData.map(item => ({
@@ -354,6 +472,13 @@ const AnalyticsScreen = ({ navigation, route }) => {
             ? Math.max(0, item.endTotal - item.startTotal)
             : 0
         }));
+        
+        // 🔥 FIX: If we have a single current record, show total usage in current month
+        if (isSingleCurrentRecord) {
+          const currentMonthIndex = new Date().getMonth();
+          console.log('📊 Single record detected, showing', totalUsage, 'L in current month:', months[currentMonthIndex]);
+          chartData[currentMonthIndex].usage = totalUsage;
+        }
         break;
     }
 
@@ -364,8 +489,15 @@ const AnalyticsScreen = ({ navigation, route }) => {
     // Calculate duration in hours
     duration = Math.floor((endTime - startTime) / (1000 * 60 * 60));
 
-    // Calculate comparison with previous period (mock for now)
-    const comparison = { value: 12.5, trend: 'up' };
+    // No comparison data - only real data from Firebase
+    const comparison = null;
+
+    console.log('📊 Final processed data:');
+    console.log('  - Total Usage:', totalUsage);
+    console.log('  - Average Flow:', averageFlow);
+    console.log('  - Peak Flow:', peakFlow);
+    console.log('  - Chart bars with data:', chartData.filter(d => d.usage > 0).length);
+    console.log('  - Sample bars:', chartData.slice(0, 5));
 
     return {
       date: dateLabel,
@@ -422,7 +554,7 @@ const AnalyticsScreen = ({ navigation, route }) => {
       averageFlow: 0,
       peakFlow: 0,
       duration: 0,
-      comparison: { value: 0, trend: 'up' },
+      comparison: null,
       chartData
     };
   };
@@ -439,6 +571,10 @@ const AnalyticsScreen = ({ navigation, route }) => {
           </tr>
         `)
         .join('');
+
+      const deviceName = selectedDevice.name || selectedDevice.deviceName || 'Unknown Device';
+      const deviceLocation = selectedDevice.location || 'Not Set';
+      const deviceIdToDisplay = selectedDevice.deviceId || selectedDevice.id || 'Unknown';
 
       const html = `
         <!DOCTYPE html>
@@ -537,9 +673,9 @@ const AnalyticsScreen = ({ navigation, route }) => {
             </div>
 
             <div class="device-info">
-              <strong>Device:</strong> ${selectedDevice.name}<br>
-              <strong>Location:</strong> ${selectedDevice.location}<br>
-              <strong>Device ID:</strong> ${selectedDevice.deviceId}
+              <strong>Device:</strong> ${deviceName}<br>
+              <strong>Location:</strong> ${deviceLocation}<br>
+              <strong>Device ID:</strong> ${deviceIdToDisplay}
             </div>
 
             <div class="stats-grid">
@@ -649,39 +785,44 @@ const AnalyticsScreen = ({ navigation, route }) => {
             </View>
             
             <ScrollView style={styles.deviceList}>
-              {devices.map((device) => (
-                <TouchableOpacity
-                  key={device.id}
-                  style={[
-                    styles.deviceItem,
-                    selectedDevice?.id === device.id && styles.selectedDeviceItem
-                  ]}
-                  onPress={() => {
-                    setSelectedDevice(device);
-                    setShowDeviceModal(false);
-                  }}
-                >
-                  <View style={styles.deviceItemIcon}>
-                    <Ionicons 
-                      name="water" 
-                      size={24} 
-                      color={selectedDevice?.id === device.id ? '#06b6d4' : '#9ca3af'} 
-                    />
-                  </View>
-                  <View style={styles.deviceItemContent}>
-                    <Text style={[
-                      styles.deviceItemName,
-                      selectedDevice?.id === device.id && styles.selectedDeviceText
-                    ]}>
-                      {device.name}
-                    </Text>
-                    <Text style={styles.deviceItemLocation}>{device.location}</Text>
-                  </View>
-                  {selectedDevice?.id === device.id && (
-                    <Ionicons name="checkmark-circle" size={24} color="#06b6d4" />
-                  )}
-                </TouchableOpacity>
-              ))}
+              {devices.map((device) => {
+                const deviceKey = device.id || device.deviceId;
+                const isSelected = (selectedDevice?.id === device.id) || (selectedDevice?.deviceId === device.deviceId);
+                
+                return (
+                  <TouchableOpacity
+                    key={deviceKey}
+                    style={[
+                      styles.deviceItem,
+                      isSelected && styles.selectedDeviceItem
+                    ]}
+                    onPress={() => {
+                      setSelectedDevice(device);
+                      setShowDeviceModal(false);
+                    }}
+                  >
+                    <View style={styles.deviceItemIcon}>
+                      <Ionicons 
+                        name="water" 
+                        size={24} 
+                        color={isSelected ? '#06b6d4' : '#9ca3af'} 
+                      />
+                    </View>
+                    <View style={styles.deviceItemContent}>
+                      <Text style={[
+                        styles.deviceItemName,
+                        isSelected && styles.selectedDeviceText
+                      ]}>
+                        {device.name || device.deviceName || 'Unknown Device'}
+                      </Text>
+                      <Text style={styles.deviceItemLocation}>{device.location || 'Not Set'}</Text>
+                    </View>
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={24} color="#06b6d4" />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </LinearGradient>
         </View>
@@ -724,14 +865,23 @@ const AnalyticsScreen = ({ navigation, route }) => {
   const BarChart = () => {
     if (!data) return null;
     
-    const chartHeight = 280; // Increased from 200
-    const maxValue = Math.max(...data.chartData.map(d => d.usage), 1);
+    // 🐛 DEBUG: Log chart data to console
+    console.log('📊 BarChart Debug - Active Tab:', activeTab);
+    console.log('📊 Chart Data Length:', data.chartData.length);
+    console.log('📊 Total Usage:', data.totalUsage);
+    console.log('📊 Chart Data Sample:', data.chartData.slice(0, 5));
+    console.log('📊 Usage Values:', data.chartData.map(d => d.usage));
     
-    // Calculate nice round numbers for Y-axis matching screenshots
+    const chartHeight = 280;
+    const maxValue = Math.max(...data.chartData.map(d => d.usage), 1);
+    const hasData = data.chartData.some(d => d.usage > 0);
+    
+    console.log('📊 Max Value for Chart:', maxValue);
+    console.log('📊 Has Data:', hasData);
+    
     const getYAxisLabels = () => {
       let topValue = maxValue;
       
-      // Round up to nice numbers based on magnitude
       if (topValue <= 1) {
         topValue = 1;
       } else if (topValue <= 2) {
@@ -741,7 +891,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
       } else if (topValue <= 5) {
         topValue = 5;
       } else {
-        // Round to nearest whole number or 5
         topValue = Math.ceil(topValue);
       }
       
@@ -762,21 +911,16 @@ const AnalyticsScreen = ({ navigation, route }) => {
           </Text>
         </View>
 
-        {/* Chart area - direct, no inner card */}
         <View style={styles.chartWrapper}>
-          {/* Chart area */}
           <View style={styles.chartArea}>
-            {/* Horizontal Grid lines */}
             <View style={styles.gridContainer}>
               {[0, 1, 2, 3, 4].map((i) => (
                 <View key={i} style={styles.gridLine} />
               ))}
             </View>
 
-            {/* Vertical dotted lines */}
             <View style={styles.verticalGridContainer}>
               {data.chartData.map((item, idx) => {
-                // Show vertical line for labeled items
                 let showLine = false;
                 
                 if (activeTab === 'M') {
@@ -785,14 +929,13 @@ const AnalyticsScreen = ({ navigation, route }) => {
                 } else if (activeTab === 'D') {
                   showLine = item.label && item.label !== '';
                 } else if (activeTab === 'W' || activeTab === 'Y') {
-                  showLine = true; // Show for all in week and year
+                  showLine = true;
                 }
                 
                 return (
                   <View key={idx} style={styles.verticalGridWrapper}>
                     {showLine && (
                       <View style={styles.verticalGridLine}>
-                        {/* Create dotted effect with small segments */}
                         {[...Array(28)].map((_, i) => (
                           <View key={i} style={styles.dottedSegment} />
                         ))}
@@ -803,20 +946,21 @@ const AnalyticsScreen = ({ navigation, route }) => {
               })}
             </View>
 
-            {/* Bars */}
             <View style={styles.barsContainer}>
               {data.chartData.map((item, idx) => {
                 const heightPercent = chartMaxValue > 0 ? (item.usage / chartMaxValue) : 0;
+                const barHeight = Math.max(chartHeight * heightPercent, item.usage > 0 ? 3 : 0);
                 
                 return (
                   <View key={idx} style={styles.barWrapper}>
                     <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-                      {item.usage > 0 && (
+                      {/* Always show bar if there's any usage, even 0.1L */}
+                      {barHeight > 0 && (
                         <LinearGradient
                           colors={['#22d3ee', '#06b6d4', '#0891b2']}
                           style={[
                             styles.bar,
-                            { height: Math.max(chartHeight * heightPercent, 3) }
+                            { height: barHeight }
                           ]}
                         />
                       )}
@@ -826,26 +970,20 @@ const AnalyticsScreen = ({ navigation, route }) => {
               })}
             </View>
 
-            {/* X-axis labels */}
             <View style={styles.xAxisContainer}>
               {data.chartData.map((item, idx) => {
                 let showLabel = '';
                 
-                // For monthly view, show only days: 1, 8, 15, 22, 29
                 if (activeTab === 'M') {
                   const day = item.day || parseInt(item.label);
                   if ([1, 8, 15, 22, 29].includes(day)) {
                     showLabel = day.toString();
                   }
-                }
-                // For daily view, only show labeled hours (12 AM, 6 AM, 12 PM, 6 PM)
-                else if (activeTab === 'D') {
+                } else if (activeTab === 'D') {
                   if (item.label && item.label !== '') {
                     showLabel = item.label;
                   }
-                }
-                // For week and year, show all labels
-                else {
+                } else {
                   showLabel = item.label;
                 }
                 
@@ -858,7 +996,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
             </View>
           </View>
 
-          {/* Y-axis labels on right */}
           <View style={styles.yAxisContainer}>
             {yAxisLabels.map((value, i) => (
               <Text key={i} style={styles.yAxisLabel}>
@@ -867,6 +1004,15 @@ const AnalyticsScreen = ({ navigation, route }) => {
             ))}
           </View>
         </View>
+        
+        {/* No Data Overlay */}
+        {!hasData && (
+          <View style={styles.noDataOverlay}>
+            <Ionicons name="bar-chart-outline" size={48} color="#4b5563" />
+            <Text style={styles.noDataText}>No usage data for this period</Text>
+            <Text style={styles.noDataSubtext}>Data will appear once your device records water usage</Text>
+          </View>
+        )}
       </View>
     );
   };
@@ -882,7 +1028,7 @@ const AnalyticsScreen = ({ navigation, route }) => {
           <Text style={styles.loadingText}>Loading analytics...</Text>
           {selectedDevice && (
             <Text style={[styles.loadingText, { fontSize: 14, marginTop: 8 }]}>
-              Device: {selectedDevice.name}
+              Device: {selectedDevice.name || selectedDevice.deviceName || 'Unknown'}
             </Text>
           )}
         </LinearGradient>
@@ -921,7 +1067,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
       
-      {/* Fixed Header - Matches HomeScreen */}
       <View style={styles.fixedHeader}>
         <LinearGradient
           colors={['#030712', '#111827']}
@@ -958,7 +1103,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
           onMomentumScrollEnd={onMomentumScrollEnd}
           onScrollEndDrag={onScrollEndDrag}
         >
-          {/* Device Selector */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Device Analytics</Text>
@@ -983,8 +1127,8 @@ const AnalyticsScreen = ({ navigation, route }) => {
                       <Ionicons name="water" size={24} color="#06b6d4" />
                     </View>
                     <View style={styles.deviceInfo}>
-                      <Text style={styles.deviceName}>{selectedDevice.name}</Text>
-                      <Text style={styles.deviceLocation}>{selectedDevice.location}</Text>
+                      <Text style={styles.deviceName}>{selectedDevice.name || selectedDevice.deviceName || 'Unknown Device'}</Text>
+                      <Text style={styles.deviceLocation}>{selectedDevice.location || 'Not Set'}</Text>
                     </View>
                     <Ionicons name="chevron-down" size={20} color="#9ca3af" />
                   </View>
@@ -992,7 +1136,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             )}
 
-            {/* Single Device Display */}
             {devices.length === 1 && selectedDevice && (
               <View style={styles.deviceSelector}>
                 <LinearGradient
@@ -1004,8 +1147,8 @@ const AnalyticsScreen = ({ navigation, route }) => {
                       <Ionicons name="water" size={24} color="#06b6d4" />
                     </View>
                     <View style={styles.deviceInfo}>
-                      <Text style={styles.deviceName}>{selectedDevice.name}</Text>
-                      <Text style={styles.deviceLocation}>{selectedDevice.location}</Text>
+                      <Text style={styles.deviceName}>{selectedDevice.name || selectedDevice.deviceName || 'Unknown Device'}</Text>
+                      <Text style={styles.deviceLocation}>{selectedDevice.location || 'Not Set'}</Text>
                     </View>
                     <View style={[styles.statusDot, { backgroundColor: '#10B981' }]} />
                   </View>
@@ -1014,7 +1157,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
             )}
           </View>
 
-          {/* Time Period Tabs */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Time Period</Text>
             <View style={styles.tabsContainer}>
@@ -1043,7 +1185,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
             </View>
           </View>
 
-          {/* Stats Grid */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Summary</Text>
             <View style={styles.statsGrid}>
@@ -1081,12 +1222,10 @@ const AnalyticsScreen = ({ navigation, route }) => {
             </View>
           </View>
 
-          {/* Bar Chart */}
           <View style={styles.section}>
             <BarChart />
           </View>
 
-          {/* Usage Statistics Card */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Usage Statistics</Text>
             <View style={styles.usageStatsCard}>
@@ -1096,7 +1235,10 @@ const AnalyticsScreen = ({ navigation, route }) => {
                   <Text style={styles.usageStatLabel}>Highest</Text>
                 </View>
                 <Text style={[styles.usageStatValue, { color: '#22d3ee' }]}>
-                  {Math.max(...data.chartData.map(d => d.usage)).toFixed(1)}L
+                  {(() => {
+                    const maxUsage = Math.max(...data.chartData.map(d => d.usage), 0);
+                    return maxUsage > 0 ? `${maxUsage.toFixed(1)}L` : '-';
+                  })()}
                 </Text>
               </View>
               
@@ -1108,7 +1250,20 @@ const AnalyticsScreen = ({ navigation, route }) => {
                   <Text style={styles.usageStatLabel}>Average</Text>
                 </View>
                 <Text style={[styles.usageStatValue, { color: '#a78bfa' }]}>
-                  {(data.chartData.reduce((sum, d) => sum + d.usage, 0) / data.chartData.length).toFixed(1)}L
+                  {(() => {
+                    const totalChartUsage = data.chartData.reduce((sum, d) => sum + d.usage, 0);
+                    const periodsWithData = data.chartData.filter(d => d.usage > 0).length;
+                    
+                    // If we have chart data with usage, calculate average
+                    if (periodsWithData > 0) {
+                      return `${(totalChartUsage / periodsWithData).toFixed(1)}L`;
+                    }
+                    // If we have total usage but no breakdown, show total
+                    else if (data.totalUsage > 0) {
+                      return `${data.totalUsage.toFixed(1)}L`;
+                    }
+                    return '-';
+                  })()}
                 </Text>
               </View>
               
@@ -1120,13 +1275,18 @@ const AnalyticsScreen = ({ navigation, route }) => {
                   <Text style={styles.usageStatLabel}>Lowest</Text>
                 </View>
                 <Text style={[styles.usageStatValue, { color: '#4ade80' }]}>
-                  {Math.min(...data.chartData.map(d => d.usage)).toFixed(1)}L
+                  {(() => {
+                    const nonZeroUsages = data.chartData.filter(d => d.usage > 0).map(d => d.usage);
+                    if (nonZeroUsages.length > 0) {
+                      return `${Math.min(...nonZeroUsages).toFixed(1)}L`;
+                    }
+                    return '-';
+                  })()}
                 </Text>
               </View>
             </View>
           </View>
 
-          {/* Export Button */}
           <View style={styles.section}>
             <TouchableOpacity 
               style={styles.exportButton} 
@@ -1146,7 +1306,6 @@ const AnalyticsScreen = ({ navigation, route }) => {
           <View style={{ height: 100 }} />
         </ScrollView>
         
-        {/* Device Selector Modal */}
         <DeviceSelectorModal />
       </LinearGradient>
     </View>
@@ -1167,7 +1326,6 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
   },
   
-  // Fixed Header - Matches HomeScreen
   fixedHeader: {
     position: 'absolute',
     top: 0,
@@ -1213,7 +1371,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   
-  // Section Styles
   section: {
     marginBottom: 30,
   },
@@ -1243,7 +1400,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   
-  // Device Selector
   deviceSelector: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -1293,7 +1449,6 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   
-  // Tabs
   tabsContainer: {
     flexDirection: 'row',
     backgroundColor: '#1f293750',
@@ -1325,7 +1480,6 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   
-  // Stats Grid
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1382,7 +1536,6 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   
-  // Chart
   chartContainer: {
     backgroundColor: '#1f293780',
     borderRadius: 24,
@@ -1411,7 +1564,7 @@ const styles = StyleSheet.create({
   yAxisContainer: {
     flexDirection: 'column',
     justifyContent: 'space-between',
-    height: 280, // Updated from 200
+    height: 280,
     marginLeft: 8,
     paddingTop: 4,
   },
@@ -1425,7 +1578,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   gridContainer: {
-    height: 280, // Updated from 200
+    height: 280,
     justifyContent: 'space-between',
   },
   gridLine: {
@@ -1435,13 +1588,13 @@ const styles = StyleSheet.create({
   verticalGridContainer: {
     position: 'absolute',
     flexDirection: 'row',
-    height: 280, // Updated from 200
+    height: 280,
     width: '100%',
     justifyContent: 'space-between',
   },
   verticalGridWrapper: {
     flex: 1,
-    height: 280, // Updated from 200
+    height: 280,
     alignItems: 'center',
   },
   verticalGridLine: {
@@ -1459,13 +1612,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
-    height: 280, // Updated from 200
-    marginTop: -280, // Updated from -200
+    height: 280,
+    marginTop: -280,
     gap: 2,
   },
   barWrapper: {
     flex: 1,
-    height: 280, // Updated from 200
+    height: 280,
   },
   bar: {
     width: '100%',
@@ -1487,7 +1640,32 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   
-  // Usage Statistics Card
+  // No Data Overlay Styles
+  noDataOverlay: {
+    position: 'absolute',
+    top: 80,
+    left: 0,
+    right: 0,
+    bottom: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(31, 41, 55, 0.5)',
+    borderRadius: 12,
+  },
+  noDataText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#9ca3af',
+    marginTop: 12,
+  },
+  noDataSubtext: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 4,
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
+  
   usageStatsCard: {
     backgroundColor: '#1f293780',
     borderRadius: 16,
@@ -1529,7 +1707,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
   },
   
-  // Export Button
   exportButton: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -1551,7 +1728,6 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   
-  // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.8)',
@@ -1624,7 +1800,6 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
   },
   
-  // Loading/Auth States
   loadingText: {
     color: '#9ca3af',
     fontSize: 16,
