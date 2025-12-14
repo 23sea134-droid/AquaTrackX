@@ -12,6 +12,8 @@ import {
   Dimensions,
   StatusBar,
   ActivityIndicator,
+  Animated,
+  Easing,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,6 +23,80 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useTabBar } from '../context/TabBarContext';
 
 const { width } = Dimensions.get('window');
+
+// Water Flow Animation Component
+const WaterFlowAnimation = ({ isFlowing }) => {
+  const wave1 = useRef(new Animated.Value(0)).current;
+  const wave2 = useRef(new Animated.Value(0)).current;
+  const wave3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (isFlowing) {
+      const createWaveAnimation = (animatedValue, delay) => {
+        return Animated.loop(
+          Animated.sequence([
+            Animated.delay(delay),
+            Animated.timing(animatedValue, {
+              toValue: 1,
+              duration: 2000,
+              easing: Easing.ease,
+              useNativeDriver: true,
+            }),
+            Animated.timing(animatedValue, {
+              toValue: 0,
+              duration: 0,
+              useNativeDriver: true,
+            }),
+          ])
+        );
+      };
+
+      const animations = Animated.parallel([
+        createWaveAnimation(wave1, 0),
+        createWaveAnimation(wave2, 400),
+        createWaveAnimation(wave3, 800),
+      ]);
+
+      animations.start();
+
+      return () => animations.stop();
+    }
+  }, [isFlowing, wave1, wave2, wave3]);
+
+  const createWaveStyle = (animatedValue) => ({
+    opacity: animatedValue.interpolate({
+      inputRange: [0, 0.5, 1],
+      outputRange: [0, 0.6, 0],
+    }),
+    transform: [
+      {
+        scale: animatedValue.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.5, 2],
+        }),
+      },
+    ],
+  });
+
+  return (
+    <View style={styles.waveContainer}>
+      {isFlowing ? (
+        <>
+          <Animated.View style={[styles.wave, createWaveStyle(wave1)]} />
+          <Animated.View style={[styles.wave, createWaveStyle(wave2)]} />
+          <Animated.View style={[styles.wave, createWaveStyle(wave3)]} />
+          <View style={styles.waveCenter}>
+            <Ionicons name="water" size={24} color="#06b6d4" />
+          </View>
+        </>
+      ) : (
+        <View style={styles.waveCenter}>
+          <Ionicons name="water-outline" size={24} color="#4B5563" />
+        </View>
+      )}
+    </View>
+  );
+};
 
 const StatusScreen = ({ navigation }) => {
   const { user } = useAuth();
@@ -401,184 +477,140 @@ const StatusScreen = ({ navigation }) => {
     const isValveLoading = valveLoading[device.id] || false;
     const flowRate = device.data?.flowRate || 0;
     const totalLitres = device.data?.totalLitres || device.totalUsage || 0;
+    const batteryLevel = device.data?.batteryPercentage || device.batteryLevel || 0;
     const isOnline = device.status?.toLowerCase() === 'online';
-    
-    // Get deviceId for commands (use actual deviceId, not the key)
     const actualDeviceId = device.deviceId || device.id;
+    
+    // Battery icon logic
+    const getBatteryIcon = () => {
+      if (batteryLevel > 75) return 'battery-full';
+      if (batteryLevel > 25) return 'battery-half';
+      return 'battery-dead';
+    };
+    
+    const getBatteryColor = () => {
+      if (batteryLevel > 75) return '#10B981';
+      if (batteryLevel > 25) return '#F59E0B';
+      return '#EF4444';
+    };
     
     return (
       <TouchableOpacity
         key={device.id || index}
         style={styles.deviceCard}
         onPress={() => handleDeviceAction(device)}
-        activeOpacity={0.85}
+        activeOpacity={0.9}
       >
         <LinearGradient
-          colors={['#1f293780', '#11182780']}
-          style={styles.deviceCardGradient}
+          colors={['#1A1F2E', '#151920']}
+          style={styles.cardGradient}
         >
-          {/* Header */}
-          <View style={styles.deviceHeader}>
-            <View style={styles.deviceHeaderLeft}>
-              <View style={[styles.statusIndicator, { backgroundColor: statusInfo.color }]}>
-                <Ionicons name={statusInfo.icon} size={24} color="#fff" />
-              </View>
-              <View style={styles.deviceInfo}>
-                <Text style={styles.deviceName}>
-                  {device.name || `Water Monitor ${index + 1}`}
-                </Text>
-                <View style={styles.statusBadge}>
-                  <View style={[styles.statusDot, { backgroundColor: statusInfo.color }]} />
-                  <Text style={[styles.statusText, { color: statusInfo.color }]}>
-                    {statusInfo.text}
-                  </Text>
-                </View>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-          </View>
-
-          {/* Location */}
-          <View style={styles.locationRow}>
-            <Ionicons name="location" size={14} color="#9ca3af" />
-            <Text style={styles.locationText}>{device.location || 'Main Supply'}</Text>
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* Valve Control */}
-          <View style={styles.valveContainer}>
-            <View style={styles.valveLeft}>
-              <View style={styles.valveIconContainer}>
-                <Ionicons 
-                  name={isValveOpen ? "water" : "water-outline"} 
-                  size={20} 
-                  color={isValveOpen ? "#10B981" : "#6B7280"} 
-                />
-              </View>
-              <View>
-                <Text style={styles.valveLabel}>Water Valve</Text>
-                <Text style={[styles.valveStatus, { color: isValveOpen ? '#10B981' : '#EF4444' }]}>
-                  {isValveLoading ? 'Updating...' : (isValveOpen ? 'OPEN' : 'CLOSED')}
-                </Text>
-              </View>
+          {/* Header Row: Device Name + Status */}
+          <View style={styles.cardHeader}>
+            <View style={styles.cardHeaderLeft}>
+              <Ionicons name="water" size={20} color="#06b6d4" />
+              <Text style={styles.cardDeviceName} numberOfLines={1}>
+                {device.name || `Water Monitor ${index + 1}`}
+              </Text>
             </View>
             
-            <TouchableOpacity
-              onPress={() => toggleValve(actualDeviceId, device.name, isValveOpen, device.status)}
-              disabled={isValveLoading || !isOnline}
-              activeOpacity={0.7}
-              style={styles.toggleButton}
-            >
-              <View style={[
-                styles.toggleTrack,
-                isValveOpen && styles.toggleTrackActive,
-                !isOnline && styles.toggleTrackDisabled
-              ]}>
-                <View style={[
-                  styles.toggleThumb,
-                  isValveOpen && styles.toggleThumbActive
-                ]}>
-                  {isValveLoading ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Ionicons 
-                      name={isValveOpen ? "checkmark" : "close"} 
-                      size={14} 
-                      color="#fff" 
-                    />
-                  )}
-                </View>
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          {/* Offline Warning */}
-          {!isOnline && (
-            <View style={styles.warningBanner}>
-              <Ionicons name="information-circle" size={14} color="#F59E0B" />
-              <Text style={styles.warningText}>Device must be online to control valve</Text>
-            </View>
-          )}
-
-          {/* Flow Rate */}
-          {isValveOpen && isOnline && flowRate > 0 && (
-            <View style={styles.flowRateContainer}>
-              <Ionicons name="speedometer" size={16} color="#3B82F6" />
-              <Text style={styles.flowRateText}>
-                Flow: <Text style={styles.flowRateValue}>{flowRate.toFixed(1)} L/min</Text>
-              </Text>
-              <Text style={styles.separator}>•</Text>
-              <Text style={styles.flowRateText}>
-                Total: <Text style={styles.flowRateValue}>{totalLitres.toFixed(2)} L</Text>
-              </Text>
-            </View>
-          )}
-
-          <View style={styles.divider} />
-
-          {/* Stats Grid */}
-          <View style={styles.statsGrid}>
-            <View style={styles.statBox}>
-              <Ionicons name="time" size={16} color="#9ca3af" />
-              <Text style={styles.statLabel}>Last Seen</Text>
-              <Text style={styles.statValue}>{formatLastSeen(device.lastSeen)}</Text>
-            </View>
-
-            <View style={[styles.statBox, styles.statBoxBorder]}>
-              <Ionicons name="wifi" size={16} color="#9ca3af" />
-              <Text style={styles.statLabel}>Signal</Text>
-              <Text style={styles.statValue}>{device.signalStrength || 'N/A'}</Text>
-            </View>
-
-            <View style={styles.statBox}>
-              <Ionicons name="battery-half" size={16} color="#9ca3af" />
-              <Text style={styles.statLabel}>Battery</Text>
-              <Text style={styles.statValue}>
-                {device.batteryLevel ? `${device.batteryLevel}%` : 'N/A'}
-              </Text>
-            </View>
-
-            <View style={[styles.statBox, styles.statBoxBorder]}>
-              <Ionicons name="water" size={16} color="#9ca3af" />
-              <Text style={styles.statLabel}>Total</Text>
-              <Text style={styles.statValue}>
-                {totalLitres ? `${totalLitres.toFixed(0)}L` : '0L'}
+            <View style={styles.statusContainer}>
+              <View style={[styles.statusDot, { backgroundColor: statusInfo.color }]} />
+              <Text style={[styles.statusLabel, { color: statusInfo.color }]}>
+                {statusInfo.text}
               </Text>
             </View>
           </View>
 
-          {/* GPS Location */}
-          {device.gpsLocation?.latitude && device.gpsLocation?.longitude && (
-            <>
-              <View style={styles.divider} />
-              <TouchableOpacity 
-                style={styles.gpsContainer}
-                onPress={() => openLocationInMaps(
-                  device.gpsLocation.latitude,
-                  device.gpsLocation.longitude
-                )}
+          {/* Battery Row */}
+          <View style={styles.batteryRow}>
+            <Ionicons 
+              name={getBatteryIcon()} 
+              size={18} 
+              color={getBatteryColor()} 
+            />
+            <Text style={[styles.batteryText, { color: getBatteryColor() }]}>
+              {batteryLevel}%
+            </Text>
+          </View>
+
+          {/* Valve Control */}
+          <View style={styles.valveSection}>
+            <Text style={styles.valveSectionLabel}>Water Valve Control</Text>
+            
+            <View style={styles.valveToggleContainer}>
+              <Text style={styles.valveStateText}>
+                {isValveLoading ? 'UPDATING...' : (isValveOpen ? 'OPEN' : 'CLOSED')}
+              </Text>
+              
+              <TouchableOpacity
+                onPress={() => toggleValve(actualDeviceId, device.name, isValveOpen, device.status)}
+                disabled={isValveLoading || !isOnline}
                 activeOpacity={0.7}
+                style={styles.toggleWrapper}
               >
-                <View style={styles.gpsLeft}>
-                  <View style={styles.gpsIcon}>
-                    <Ionicons name="navigate" size={14} color="#10B981" />
-                  </View>
-                  <View>
-                    <Text style={styles.gpsLabel}>GPS Location</Text>
-                    <Text style={styles.gpsCoords}>
-                      {device.gpsLocation.latitude.toFixed(6)}, {device.gpsLocation.longitude.toFixed(6)}
-                    </Text>
+                <View style={[
+                  styles.toggleContainer,
+                  isValveOpen && styles.toggleContainerActive,
+                  !isOnline && styles.toggleContainerDisabled
+                ]}>
+                  <View style={[
+                    styles.toggleCircle,
+                    isValveOpen && styles.toggleCircleActive
+                  ]}>
+                    {isValveLoading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Ionicons 
+                        name={isValveOpen ? "checkmark" : "close"} 
+                        size={16} 
+                        color="#fff" 
+                      />
+                    )}
                   </View>
                 </View>
-                <Ionicons name="open-outline" size={16} color="#10B981" />
               </TouchableOpacity>
-            </>
-          )}
+            </View>
+
+            {!isOnline && (
+              <View style={styles.offlineWarning}>
+                <Ionicons name="alert-circle" size={14} color="#F59E0B" />
+                <Text style={styles.offlineWarningText}>Device offline - Cannot control valve</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Water Flow Indicator */}
+          <View style={styles.flowSection}>
+            <WaterFlowAnimation isFlowing={isOnline && flowRate > 0} />
+            
+            <View style={styles.flowStats}>
+              <View style={styles.flowStatItem}>
+                <Ionicons name="speedometer-outline" size={16} color="#06b6d4" />
+                <Text style={styles.flowStatLabel}>Flow Rate</Text>
+                <Text style={styles.flowStatValue}>
+                  {flowRate > 0 ? `${flowRate.toFixed(1)} L/min` : '0.0 L/min'}
+                </Text>
+              </View>
+              
+              <View style={styles.flowDivider} />
+              
+              <View style={styles.flowStatItem}>
+                <Ionicons name="water-outline" size={16} color="#10B981" />
+                <Text style={styles.flowStatLabel}>Total Usage</Text>
+                <Text style={styles.flowStatValue}>
+                  {totalLitres >= 1000 
+                    ? `${(totalLitres / 1000).toFixed(2)} m³`
+                    : `${totalLitres.toFixed(0)} L`
+                  }
+                </Text>
+              </View>
+            </View>
+          </View>
         </LinearGradient>
       </TouchableOpacity>
     );
-  }, [getStatusInfo, handleDeviceAction, formatLastSeen, openLocationInMaps, valveStates, valveLoading, toggleValve]);
+  }, [getStatusInfo, handleDeviceAction, valveStates, valveLoading, toggleValve]);
 
   if (loading && user) {
     return (
@@ -822,435 +854,386 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-},
-headerTitle: {
-fontSize: 24,
-fontWeight: 'bold',
-color: '#fff',
-marginBottom: 4,
-},
-headerSubtitle: {
-fontSize: 14,
-color: '#9ca3af',
-},
-// Real-time Mode Card
-modeCard: {
-flexDirection: 'row',
-alignItems: 'center',
-paddingHorizontal: 16,
-paddingVertical: 10,
-borderRadius: 12,
-borderWidth: 1,
-borderColor: '#37415140',
-},
-modeText: {
-fontSize: 13,
-fontWeight: '600',
-marginLeft: 8,
-},
-// Section
-section: {
-marginBottom: 30,
-},
-sectionHeader: {
-flexDirection: 'row',
-justifyContent: 'space-between',
-alignItems: 'center',
-marginBottom: 16,
-},
-sectionTitle: {
-fontSize: 20,
-fontWeight: 'bold',
-color: '#fff',
-marginBottom: 16,
-},
-countBadge: {
-backgroundColor: '#06b6d420',
-paddingHorizontal: 12,
-paddingVertical: 4,
-borderRadius: 12,
-borderWidth: 1,
-borderColor: '#06b6d440',
-},
-countBadgeText: {
-fontSize: 12,
-color: '#06b6d4',
-fontWeight: '600',
-},
-// Filters
-filtersGrid: {
-flexDirection: 'row',
-flexWrap: 'wrap',
-gap: 12,
-},
-filterCard: {
-width: (width - 52) / 2,
-borderRadius: 16,
-overflow: 'hidden',
-},
-filterCardActive: {
-shadowColor: '#06b6d4',
-shadowOffset: { width: 0, height: 4 },
-shadowOpacity: 0.3,
-shadowRadius: 8,
-elevation: 4,
-},
-filterGradient: {
-padding: 16,
-alignItems: 'center',
-borderWidth: 1,
-borderColor: '#37415140',
-borderRadius: 16,
-},
-filterIcon: {
-width: 44,
-height: 44,
-borderRadius: 22,
-justifyContent: 'center',
-alignItems: 'center',
-marginBottom: 10,
-shadowColor: '#000',
-shadowOffset: { width: 0, height: 2 },
-shadowOpacity: 0.3,
-shadowRadius: 4,
-elevation: 3,
-},
-filterCount: {
-fontSize: 20,
-fontWeight: 'bold',
-color: '#fff',
-marginBottom: 4,
-},
-filterLabel: {
-fontSize: 12,
-color: '#9ca3af',
-fontWeight: '600',
-},
-filterTextActive: {
-color: '#fff',
-},
-// Device Card
-deviceCard: {
-marginBottom: 16,
-borderRadius: 16,
-overflow: 'hidden',
-},
-deviceCardGradient: {
-padding: 16,
-borderWidth: 1,
-borderColor: '#37415140',
-borderRadius: 16,
-},
-deviceHeader: {
-flexDirection: 'row',
-justifyContent: 'space-between',
-alignItems: 'flex-start',
-marginBottom: 12,
-},
-deviceHeaderLeft: {
-flexDirection: 'row',
-alignItems: 'flex-start',
-flex: 1,
-},
-statusIndicator: {
-width: 48,
-height: 48,
-borderRadius: 24,
-justifyContent: 'center',
-alignItems: 'center',
-marginRight: 12,
-shadowColor: '#000',
-shadowOffset: { width: 0, height: 2 },
-shadowOpacity: 0.4,
-shadowRadius: 6,
-elevation: 4,
-},
-deviceInfo: {
-flex: 1,
-paddingTop: 2,
-},
-deviceName: {
-fontSize: 18,
-fontWeight: 'bold',
-color: '#fff',
-marginBottom: 6,
-},
-statusBadge: {
-flexDirection: 'row',
-alignItems: 'center',
-backgroundColor: '#1f293780',
-paddingHorizontal: 10,
-paddingVertical: 5,
-borderRadius: 12,
-alignSelf: 'flex-start',
-},
-statusDot: {
-width: 6,
-height: 6,
-borderRadius: 3,
-marginRight: 6,
-},
-statusText: {
-fontSize: 12,
-fontWeight: '600',
-},
-locationRow: {
-flexDirection: 'row',
-alignItems: 'center',
-marginBottom: 16,
-},
-locationText: {
-fontSize: 14,
-color: '#9ca3af',
-marginLeft: 6,
-fontWeight: '500',
-},
-divider: {
-height: 1,
-backgroundColor: '#37415140',
-marginVertical: 16,
-},
-// Valve Control
-valveContainer: {
-flexDirection: 'row',
-justifyContent: 'space-between',
-alignItems: 'center',
-backgroundColor: '#1f293780',
-padding: 14,
-borderRadius: 14,
-borderWidth: 1,
-borderColor: '#37415140',
-},
-valveLeft: {
-flexDirection: 'row',
-alignItems: 'center',
-flex: 1,
-},
-valveIconContainer: {
-width: 40,
-height: 40,
-borderRadius: 20,
-backgroundColor: '#06b6d420',
-justifyContent: 'center',
-alignItems: 'center',
-marginRight: 12,
-borderWidth: 1,
-borderColor: '#06b6d440',
-},
-valveLabel: {
-fontSize: 13,
-color: '#9ca3af',
-marginBottom: 3,
-fontWeight: '600',
-},
-valveStatus: {
-fontSize: 16,
-fontWeight: '700',
-},
-toggleButton: {
-padding: 4,
-},
-toggleTrack: {
-width: 56,
-height: 30,
-borderRadius: 15,
-backgroundColor: '#EF444420',
-borderWidth: 2,
-borderColor: '#EF4444',
-padding: 2,
-justifyContent: 'center',
-},
-toggleTrackActive: {
-backgroundColor: '#10B98120',
-borderColor: '#10B981',
-},
-toggleTrackDisabled: {
-opacity: 0.4,
-backgroundColor: '#6B728020',
-borderColor: '#6B7280',
-},
-toggleThumb: {
-width: 22,
-height: 22,
-borderRadius: 11,
-backgroundColor: '#EF4444',
-justifyContent: 'center',
-alignItems: 'center',
-shadowColor: '#000',
-shadowOffset: { width: 0, height: 2 },
-shadowOpacity: 0.3,
-shadowRadius: 3,
-elevation: 3,
-},
-toggleThumbActive: {
-backgroundColor: '#10B981',
-alignSelf: 'flex-end',
-},
-warningBanner: {
-flexDirection: 'row',
-alignItems: 'center',
-marginTop: 12,
-paddingHorizontal: 12,
-paddingVertical: 8,
-backgroundColor: '#F59E0B20',
-borderRadius: 10,
-borderWidth: 1,
-borderColor: '#F59E0B40',
-},
-warningText: {
-fontSize: 12,
-color: '#F59E0B',
-marginLeft: 8,
-fontWeight: '600',
-flex: 1,
-},
-flowRateContainer: {
-flexDirection: 'row',
-alignItems: 'center',
-marginTop: 12,
-paddingHorizontal: 12,
-paddingVertical: 8,
-backgroundColor: '#3B82F620',
-borderRadius: 10,
-borderWidth: 1,
-borderColor: '#3B82F640',
-},
-flowRateText: {
-fontSize: 12,
-color: '#9ca3af',
-marginLeft: 8,
-fontWeight: '600',
-},
-flowRateValue: {
-color: '#3B82F6',
-fontWeight: '700',
-},
-separator: {
-fontSize: 12,
-color: '#6B7280',
-marginHorizontal: 8,
-},
-// Stats Grid
-statsGrid: {
-flexDirection: 'row',
-flexWrap: 'wrap',
-},
-statBox: {
-width: '50%',
-alignItems: 'center',
-paddingVertical: 12,
-},
-statBoxBorder: {
-borderLeftWidth: 1,
-borderLeftColor: '#37415140',
-},
-statLabel: {
-fontSize: 11,
-color: '#9ca3af',
-marginTop: 6,
-marginBottom: 4,
-fontWeight: '600',
-},
-statValue: {
-fontSize: 15,
-fontWeight: '700',
-color: '#fff',
-},
-// GPS
-gpsContainer: {
-flexDirection: 'row',
-alignItems: 'center',
-justifyContent: 'space-between',
-backgroundColor: '#10B98120',
-padding: 12,
-borderRadius: 12,
-borderWidth: 1,
-borderColor: '#10B98140',
-},
-gpsLeft: {
-flexDirection: 'row',
-alignItems: 'center',
-flex: 1,
-},
-gpsIcon: {
-width: 32,
-height: 32,
-borderRadius: 16,
-backgroundColor: '#10B98140',
-justifyContent: 'center',
-alignItems: 'center',
-marginRight: 10,
-},
-gpsLabel: {
-fontSize: 12,
-fontWeight: '600',
-color: '#10B981',
-marginBottom: 2,
-},
-gpsCoords: {
-fontSize: 11,
-color: '#10B981',
-fontFamily: 'monospace',
-fontWeight: '500',
-},
-// Empty State
-emptyState: {
-alignItems: 'center',
-padding: 40,
-backgroundColor: '#1f293780',
-borderRadius: 16,
-borderWidth: 1,
-borderColor: '#37415140',
-},
-emptyStateText: {
-fontSize: 18,
-fontWeight: 'bold',
-color: '#fff',
-marginTop: 16,
-},
-emptyStateSubtext: {
-fontSize: 14,
-color: '#9ca3af',
-marginTop: 8,
-textAlign: 'center',
-},
-addButton: {
-marginTop: 20,
-borderRadius: 12,
-overflow: 'hidden',
-},
-addButtonGradient: {
-flexDirection: 'row',
-alignItems: 'center',
-paddingHorizontal: 20,
-paddingVertical: 12,
-},
-addButtonText: {
-color: '#fff',
-fontSize: 14,
-fontWeight: 'bold',
-marginLeft: 8,
-},
-// Loading States
-loadingText: {
-color: '#9ca3af',
-fontSize: 16,
-marginTop: 16,
-},
-notAuthTitle: {
-fontSize: 22,
-fontWeight: 'bold',
-color: '#fff',
-marginTop: 20,
-textAlign: 'center',
-},
-notAuthSubtitle: {
-fontSize: 16,
-color: '#9ca3af',
-marginTop: 10,
-textAlign: 'center',
-paddingHorizontal: 40,
-},
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#9ca3af',
+  },
+  // Real-time Mode Card
+  modeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#37415140',
+  },
+  modeText: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  // Section
+  section: {
+    marginBottom: 30,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 16,
+  },
+  countBadge: {
+    backgroundColor: '#06b6d420',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#06b6d440',
+  },
+  countBadgeText: {
+    fontSize: 12,
+    color: '#06b6d4',
+    fontWeight: '600',
+  },
+  // Filters
+  filtersGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  filterCard: {
+    width: (width - 52) / 2,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  filterCardActive: {
+    shadowColor: '#06b6d4',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  filterGradient: {
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#37415140',
+    borderRadius: 16,
+  },
+  filterIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  filterCount: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  filterLabel: {
+    fontSize: 12,
+    color: '#9ca3af',
+    fontWeight: '600',
+  },
+  filterTextActive: {
+    color: '#fff',
+  },
+  // New Modern Device Card Styles
+  deviceCard: {
+    marginBottom: 16,
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  cardGradient: {
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#2A3441',
+    borderRadius: 20,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  cardHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 10,
+  },
+  cardDeviceName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+    flex: 1,
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1F2937',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  batteryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    backgroundColor: '#1F2937',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    gap: 6,
+    marginBottom: 16,
+  },
+  batteryText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  valveSection: {
+    backgroundColor: '#1F2937',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  valveSectionLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#9CA3AF',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 12,
+  },
+  valveToggleContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  valveStateText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+    letterSpacing: 1,
+  },
+  toggleWrapper: {
+    padding: 4,
+  },
+  toggleContainer: {
+    width: 64,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EF4444',
+    padding: 2,
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  toggleContainerActive: {
+    backgroundColor: '#10B981',
+  },
+  toggleContainerDisabled: {
+    backgroundColor: '#4B5563',
+    opacity: 0.5,
+  },
+  toggleCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  toggleCircleActive: {
+    alignSelf: 'flex-end',
+  },
+  offlineWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#F59E0B20',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F59E0B40',
+    gap: 8,
+  },
+  offlineWarningText: {
+    fontSize: 11,
+    color: '#F59E0B',
+    fontWeight: '600',
+    flex: 1,
+  },
+  flowSection: {
+    backgroundColor: '#1F2937',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  waveContainer: {
+    width: 80,
+    height: 80,
+    alignSelf: 'center',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  wave: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#06b6d4',
+    borderWidth: 2,
+    borderColor: '#06b6d4',
+  },
+  waveCenter: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#111827',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#374151',
+    zIndex: 10,
+  },
+  flowStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  flowStatItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 6,
+  },
+  flowStatLabel: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  flowStatValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  flowDivider: {
+    width: 1,
+    backgroundColor: '#374151',
+    marginHorizontal: 16,
+  },
+  // Empty State
+  emptyState: {
+    alignItems: 'center',
+    padding: 40,
+    backgroundColor: '#1f293780',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#37415140',
+  },
+  emptyStateText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginTop: 16,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  addButton: {
+    marginTop: 20,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  addButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+  },
+  addButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  // Loading States
+  loadingText: {
+    color: '#9ca3af',
+    fontSize: 16,
+    marginTop: 16,
+  },
+  notAuthTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginTop: 20,
+    textAlign: 'center',
+  },
+  notAuthSubtitle: {
+    fontSize: 16,
+    color: '#9ca3af',
+    marginTop: 10,
+    textAlign: 'center',
+    paddingHorizontal: 40,
+  },
 });
 
 export default StatusScreen;
