@@ -165,17 +165,100 @@ const ProfileScreen = ({ navigation }) => {
     }
   }, [user?.uid, user?.displayName, user?.email, setLoading]);
 
-  // Load devices
+  // Load devices with REAL-TIME status listeners
   const loadDevices = useCallback(async () => {
     if (!user?.uid) return;
 
     setLoading('devices', true);
     try {
-      const result = await deviceService.getUserDevices(user.uid);
-      if (mountedRef.current) {
-        if (result?.success) {
-          setDevices(result.devices || []);
-        } else {
+      const db = getDatabase();
+      const userDevicesRef = ref(db, `users/${user.uid}/devices`);
+      const snapshot = await get(userDevicesRef);
+      
+      if (snapshot.exists()) {
+        const devicesData = snapshot.val();
+        const devicesList = [];
+        
+        // For each device, get the actual status from devices/$deviceId/info
+        for (const [key, device] of Object.entries(devicesData)) {
+          const deviceId = device.deviceId || key;
+          
+          // Get real-time device info including status
+          const deviceInfoRef = ref(db, `devices/${deviceId}/info`);
+          const deviceDataRef = ref(db, `devices/${deviceId}/data`);
+          
+          try {
+            const [deviceInfoSnapshot, deviceDataSnapshot] = await Promise.all([
+              get(deviceInfoRef),
+              get(deviceDataRef)
+            ]);
+            
+            let actualStatus = 'offline';
+            let lastSeen = null;
+            
+            // Check device info for status
+            if (deviceInfoSnapshot.exists()) {
+              const deviceInfo = deviceInfoSnapshot.val();
+              actualStatus = deviceInfo.status || 'offline';
+              lastSeen = deviceInfo.lastSeen;
+              
+              // Additional check: if lastSeen is more than 5 minutes old, mark as offline
+              if (lastSeen) {
+                const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+                if (lastSeen < fiveMinutesAgo && actualStatus === 'online') {
+                  actualStatus = 'offline';
+                }
+              }
+            }
+            
+            // Also check device data for latest status
+            if (deviceDataSnapshot.exists()) {
+              const deviceData = deviceDataSnapshot.val();
+              if (deviceData.status) {
+                actualStatus = deviceData.status;
+              }
+              // Check timestamp from data
+              if (deviceData.timestamp) {
+                const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+                if (deviceData.timestamp < fiveMinutesAgo && actualStatus === 'online') {
+                  actualStatus = 'offline';
+                }
+              }
+            }
+            
+            console.log(`Device ${deviceId} status: ${actualStatus}, lastSeen: ${lastSeen}`);
+            
+            devicesList.push({
+              id: key,
+              deviceId: deviceId,
+              name: device.name || 'Water Monitor',
+              location: device.location || 'Main Supply',
+              status: actualStatus, // Use the actual status
+              totalUsage: device.totalUsage || 0,
+              batteryLevel: device.batteryLevel || 0,
+              signalStrength: device.signalStrength || 'Unknown',
+            });
+          } catch (error) {
+            console.error(`Error loading device ${deviceId}:`, error);
+            // If we can't get device info, add it with offline status
+            devicesList.push({
+              id: key,
+              deviceId: deviceId,
+              name: device.name || 'Water Monitor',
+              location: device.location || 'Main Supply',
+              status: 'offline',
+              totalUsage: device.totalUsage || 0,
+              batteryLevel: device.batteryLevel || 0,
+              signalStrength: device.signalStrength || 'Unknown',
+            });
+          }
+        }
+        
+        if (mountedRef.current) {
+          setDevices(devicesList);
+        }
+      } else {
+        if (mountedRef.current) {
           setDevices([]);
         }
       }
@@ -190,6 +273,92 @@ const ProfileScreen = ({ navigation }) => {
       }
     }
   }, [user?.uid, setLoading]);
+
+  // Set up real-time listeners for device status updates
+  useEffect(() => {
+    if (!user?.uid || devices.length === 0) return;
+
+    const db = getDatabase();
+    const listeners = [];
+
+    // Set up listener for each device
+    devices.forEach((device) => {
+      const deviceId = device.deviceId;
+      
+      // Listen to device info changes
+      const deviceInfoRef = ref(db, `devices/${deviceId}/info`);
+      const infoListener = onValue(deviceInfoRef, (snapshot) => {
+        if (snapshot.exists() && mountedRef.current) {
+          const deviceInfo = snapshot.val();
+          let newStatus = deviceInfo.status || 'offline';
+          const lastSeen = deviceInfo.lastSeen;
+          
+          // Check if device is really online based on lastSeen
+          if (lastSeen) {
+            const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+            if (lastSeen < fiveMinutesAgo && newStatus === 'online') {
+              newStatus = 'offline';
+            }
+          }
+          
+          // Update only this device's status
+          setDevices(prevDevices => 
+            prevDevices.map(d => 
+              d.deviceId === deviceId 
+                ? { ...d, status: newStatus }
+                : d
+            )
+          );
+          
+          console.log(`Real-time update: Device ${deviceId} status changed to ${newStatus}`);
+        }
+      });
+      
+      // Listen to device data changes
+      const deviceDataRef = ref(db, `devices/${deviceId}/data`);
+      const dataListener = onValue(deviceDataRef, (snapshot) => {
+        if (snapshot.exists() && mountedRef.current) {
+          const deviceData = snapshot.val();
+          let newStatus = deviceData.status || 'offline';
+          const timestamp = deviceData.timestamp;
+          
+          // Check if device is really online based on timestamp
+          if (timestamp) {
+            const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+            if (timestamp < fiveMinutesAgo && newStatus === 'online') {
+              newStatus = 'offline';
+            }
+          }
+          
+          // Update only this device's status
+          setDevices(prevDevices => 
+            prevDevices.map(d => 
+              d.deviceId === deviceId 
+                ? { 
+                    ...d, 
+                    status: newStatus,
+                    totalUsage: deviceData.totalLitres || d.totalUsage,
+                    batteryLevel: deviceData.batteryPercentage || d.batteryLevel
+                  }
+                : d
+            )
+          );
+          
+          console.log(`Real-time data update: Device ${deviceId} - status: ${newStatus}, usage: ${deviceData.totalLitres}`);
+        }
+      });
+      
+      listeners.push({ ref: deviceInfoRef, unsubscribe: infoListener });
+      listeners.push({ ref: deviceDataRef, unsubscribe: dataListener });
+    });
+
+    // Cleanup listeners when component unmounts or devices change
+    return () => {
+      listeners.forEach(({ ref: listenerRef, unsubscribe }) => {
+        off(listenerRef, 'value', unsubscribe);
+      });
+    };
+  }, [user?.uid, devices.length]); // Re-run when device list changes
 
   // Remove device function
   const handleRemoveDevice = useCallback(async () => {
@@ -303,39 +472,45 @@ const ProfileScreen = ({ navigation }) => {
     }
   }, [user?.uid, userData, loadingStates.updatingProfile, setLoading, updateUserName]);
 
-  // Update device - CORRECTED VERSION
+  // Update device - COMPLETELY FIXED VERSION
   const handleUpdateDevice = useCallback(async () => {
     if (!editingDevice || !user?.uid || loadingStates.updatingDevice) return;
 
+    // Validate that name is not empty
+    if (!editingDevice.name || editingDevice.name.trim() === '') {
+      Alert.alert('Error', 'Device name cannot be empty');
+      return;
+    }
+
     setLoading('updatingDevice', true);
     try {
-      // Create a clean update object with only the fields we want to update
-      const updateData = {
-        name: editingDevice.name || '',
-        location: editingDevice.location || '',
-        deviceId: editingDevice.deviceId || editingDevice.id,
-        // Don't include version, status, or other fields that might be undefined
-      };
+      const db = getDatabase();
+      
+      // Update BOTH locations:
+      // 1. User's device list
+      const userDeviceRef = ref(db, `users/${user.uid}/devices/${editingDevice.id}`);
+      await update(userDeviceRef, {
+        name: editingDevice.name.trim(),
+        location: editingDevice.location?.trim() || '',
+      });
+      
+      // 2. Device info (so it shows in other places too)
+      const deviceInfoRef = ref(db, `devices/${editingDevice.deviceId}/info`);
+      await update(deviceInfoRef, {
+        name: editingDevice.name.trim(),
+        location: editingDevice.location?.trim() || '',
+      });
 
-      const result = await deviceService.updateDevice(
-        user.uid,
-        editingDevice.id,
-        updateData
-      );
       if (mountedRef.current) {
-        if (result?.success) {
-          Alert.alert('Success', 'Device updated successfully');
-          setShowEditModal(false);
-          setEditingDevice(null);
-          await loadDevices();
-        } else {
-          Alert.alert('Error', result?.error || 'Failed to update device');
-        }
+        Alert.alert('Success', 'Device updated successfully');
+        setShowEditModal(false);
+        setEditingDevice(null);
+        await loadDevices();
       }
     } catch (error) {
       console.error('Device update error:', error);
       if (mountedRef.current) {
-        Alert.alert('Error', 'Failed to update device');
+        Alert.alert('Error', 'Failed to update device. Please try again.');
       }
     } finally {
       if (mountedRef.current) {
@@ -390,17 +565,27 @@ const ProfileScreen = ({ navigation }) => {
     return `${usage.toFixed(0)} L`;
   }, []);
 
+  // FIXED: Get status color based on actual device status
   const getStatusColor = useCallback((status) => {
-    switch (status?.toLowerCase()) {
-      case 'online':
-      case 'active':
-        return '#10B981';
-      case 'offline':
-      case 'inactive':
-        return '#EF4444';
-      default:
-        return '#6B7280';
+    const statusLower = status?.toLowerCase() || '';
+    
+    // Check for online/active states
+    if (statusLower === 'online' || statusLower === 'active') {
+      return '#10B981';
     }
+    
+    // Check for offline/inactive states  
+    if (statusLower === 'offline' || statusLower === 'inactive') {
+      return '#EF4444';
+    }
+    
+    // Alert states
+    if (statusLower === 'alert') {
+      return '#F59E0B';
+    }
+    
+    // Default to gray for unknown states
+    return '#6B7280';
   }, []);
 
   // Safe device ID display
@@ -476,7 +661,7 @@ const ProfileScreen = ({ navigation }) => {
             />
           }
         >
-          {/* Profile Card - now appears lower */}
+          {/* Profile Card */}
           <View style={styles.profileSection}>
             <TouchableOpacity 
               style={styles.profileCard}
@@ -556,10 +741,15 @@ const ProfileScreen = ({ navigation }) => {
                         </Text>
                       </View>
                       <View style={styles.deviceRight}>
-                        <View style={[
-                          styles.statusDot, 
-                          { backgroundColor: getStatusColor(device.status) }
-                        ]} />
+                        <View style={styles.statusIndicator}>
+                          <View style={[
+                            styles.statusDot, 
+                            { backgroundColor: getStatusColor(device.status) }
+                          ]} />
+                          <Text style={styles.statusText}>
+                            {(device.status || 'unknown').toUpperCase()}
+                          </Text>
+                        </View>
                         <Ionicons name="chevron-forward" size={24} color="#9ca3af" />
                       </View>
                     </View>
@@ -687,10 +877,11 @@ const ProfileScreen = ({ navigation }) => {
                     <Text style={styles.inputLabel}>Device Name</Text>
                     <TextInput
                       style={styles.textInput}
-                      value={editingDevice?.name || ''}
-                      onChangeText={(text) => setEditingDevice(prev => prev ? { ...prev, name: text } : null)}
+                      value={editingDevice.name}
+                      onChangeText={(text) => setEditingDevice(prev => ({ ...prev, name: text }))}
                       placeholder="Enter device name"
                       placeholderTextColor="#6B7280"
+                      autoFocus={false}
                     />
                   </View>
 
@@ -698,8 +889,8 @@ const ProfileScreen = ({ navigation }) => {
                     <Text style={styles.inputLabel}>Location</Text>
                     <TextInput
                       style={styles.textInput}
-                      value={editingDevice?.location || ''}
-                      onChangeText={(text) => setEditingDevice(prev => prev ? { ...prev, location: text } : null)}
+                      value={editingDevice.location}
+                      onChangeText={(text) => setEditingDevice(prev => ({ ...prev, location: text }))}
                       placeholder="Enter device location"
                       placeholderTextColor="#6B7280"
                     />
@@ -1069,11 +1260,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
+    backgroundColor: '#1f293780',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
   statusDot: {
     width: 10,
     height: 10,
     borderRadius: 5,
-    marginRight: 8,
+    marginRight: 6,
+  },
+  statusText: {
+    fontSize: 9,
+    color: '#9ca3af',
+    fontWeight: '600',
   },
   deviceStats: {
     flexDirection: 'row',
@@ -1349,3 +1554,4 @@ const styles = StyleSheet.create({
 });
 
 export default ProfileScreen;
+
